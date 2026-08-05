@@ -64,7 +64,9 @@ variant name), matching the Rust server's `proto.rs` name-for-name. The
 encoding lives in `proto.go` (via `fxamacker/cbor`) and is pinned by golden
 vectors shared with the Rust test suite (`proto_test.go` here,
 `wire_format_is_stable` there) — variant and field names are the wire
-contract; never rename them.
+contract; never rename them. The full protocol spec with annotated CBOR
+examples lives in the server repo:
+[docs/protocol.md](https://github.com/fables-for-robots/secret-bunker-iroh/blob/main/docs/protocol.md).
 
 ## Testing
 
