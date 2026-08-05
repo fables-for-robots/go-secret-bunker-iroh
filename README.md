@@ -58,11 +58,13 @@ this module carries a `replace` directive pointing at the
 
 ## Wire format
 
-Messages are [postcard](https://postcard.jamesmunns.com/wire-format)-encoded,
-matching the Rust server's `proto.rs` variant-for-variant. The encoding is
-hand-rolled in `postcard.go`/`proto.go` and pinned by golden vectors shared
-with the Rust test suite (`proto_test.go` here, `wire_format_is_stable`
-there) — the enum ordering is a wire contract, append-only on both sides.
+Messages are CBOR-encoded in serde's externally-tagged enum representation
+(unit variants as text strings, others as single-entry maps keyed by the
+variant name), matching the Rust server's `proto.rs` name-for-name. The
+encoding lives in `proto.go` (via `fxamacker/cbor`) and is pinned by golden
+vectors shared with the Rust test suite (`proto_test.go` here,
+`wire_format_is_stable` there) — variant and field names are the wire
+contract; never rename them.
 
 ## Testing
 

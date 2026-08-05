@@ -1,12 +1,17 @@
 package secretbunker
 
-// Wire types mirroring the Rust server's proto.rs. Variant indices are the
-// postcard enum discriminants — a wire contract shared with
-// github.com/fables-for-robots/secret-bunker-iroh (see its
-// wire_format_is_stable test). Append-only; never renumber.
+// Wire types mirroring the Rust server's proto.rs, CBOR-encoded in serde's
+// externally-tagged enum representation: unit variants are text strings,
+// all others are single-entry maps keyed by the variant name, with struct
+// fields as text-keyed map entries and tuples as arrays. Variant and field
+// NAMES are the wire contract, shared with the Rust repo's
+// wire_format_is_stable test — never rename.
 
 import (
+	"errors"
 	"fmt"
+
+	"github.com/fxamacker/cbor/v2"
 )
 
 // ALPN is the protocol identifier for bunker connections.
@@ -22,132 +27,122 @@ const (
 	PermAdmin byte = 4
 )
 
-// Request discriminants.
-const (
-	reqGet uint64 = iota
-	reqPut
-	reqDelete
-	reqList
-	reqCreateGroup
-	reqAddIdentity
-	reqRemoveIdentity
-	reqListIdentities
-	reqGrant
-	reqRotateDek
-	reqListGroups
-	reqGroupAcl
-)
-
-// Response discriminants.
-const (
-	respDenied uint64 = iota
-	respOk
-	respSecret
-	respVersion
-	respVersionConflict
-	respNames
-	respIdentities
-	respGroups
-	respAcl
-	respFailed
-)
-
-func encodeRequest(discriminant uint64, fields func(*encoder)) []byte {
-	e := &encoder{}
-	e.uvarint(discriminant)
-	if fields != nil {
-		fields(e)
+func marshal(v any) []byte {
+	buf, err := cbor.Marshal(v)
+	if err != nil {
+		// Only reachable via a bug in the fixed shapes below.
+		panic(fmt.Sprintf("secretbunker: encoding request: %v", err))
 	}
-	return e.buf
+	return buf
 }
 
 func encGet(group, name string) []byte {
-	return encodeRequest(reqGet, func(e *encoder) { e.str(group); e.str(name) })
+	return marshal(map[string]any{"Get": struct {
+		Group string `cbor:"group"`
+		Name  string `cbor:"name"`
+	}{group, name}})
 }
 
 func encPut(group, name string, value []byte, expectedVersion uint64) []byte {
-	return encodeRequest(reqPut, func(e *encoder) {
-		e.str(group)
-		e.str(name)
-		e.bytes(value)
-		e.uvarint(expectedVersion)
-	})
+	if value == nil {
+		value = []byte{}
+	}
+	return marshal(map[string]any{"Put": struct {
+		Group           string `cbor:"group"`
+		Name            string `cbor:"name"`
+		Value           []byte `cbor:"value"`
+		ExpectedVersion uint64 `cbor:"expected_version"`
+	}{group, name, value, expectedVersion}})
 }
 
 func encDelete(group, name string, expectedVersion uint64) []byte {
-	return encodeRequest(reqDelete, func(e *encoder) {
-		e.str(group)
-		e.str(name)
-		e.uvarint(expectedVersion)
-	})
+	return marshal(map[string]any{"Delete": struct {
+		Group           string `cbor:"group"`
+		Name            string `cbor:"name"`
+		ExpectedVersion uint64 `cbor:"expected_version"`
+	}{group, name, expectedVersion}})
 }
 
 func encList(group string) []byte {
-	return encodeRequest(reqList, func(e *encoder) { e.str(group) })
+	return marshal(map[string]any{"List": struct {
+		Group string `cbor:"group"`
+	}{group}})
 }
 
 func encCreateGroup(name string) []byte {
-	return encodeRequest(reqCreateGroup, func(e *encoder) { e.str(name) })
+	return marshal(map[string]any{"CreateGroup": struct {
+		Name string `cbor:"name"`
+	}{name}})
 }
 
 func encAddIdentity(name, endpointID string, serviceAdmin bool) []byte {
-	return encodeRequest(reqAddIdentity, func(e *encoder) {
-		e.str(name)
-		e.str(endpointID)
-		e.boolean(serviceAdmin)
-	})
+	return marshal(map[string]any{"AddIdentity": struct {
+		Name         string `cbor:"name"`
+		EndpointID   string `cbor:"endpoint_id"`
+		ServiceAdmin bool   `cbor:"service_admin"`
+	}{name, endpointID, serviceAdmin}})
 }
 
 func encRemoveIdentity(name string) []byte {
-	return encodeRequest(reqRemoveIdentity, func(e *encoder) { e.str(name) })
+	return marshal(map[string]any{"RemoveIdentity": struct {
+		Name string `cbor:"name"`
+	}{name}})
 }
 
 func encListIdentities() []byte {
-	return encodeRequest(reqListIdentities, nil)
+	return marshal("ListIdentities")
 }
 
 func encGrant(group, identity string, perms byte) []byte {
-	return encodeRequest(reqGrant, func(e *encoder) {
-		e.str(group)
-		e.str(identity)
-		e.u8(perms)
-	})
+	return marshal(map[string]any{"Grant": struct {
+		Group    string `cbor:"group"`
+		Identity string `cbor:"identity"`
+		Perms    byte   `cbor:"perms"`
+	}{group, identity, perms}})
 }
 
 func encRotateDek(group string) []byte {
-	return encodeRequest(reqRotateDek, func(e *encoder) { e.str(group) })
+	return marshal(map[string]any{"RotateDek": struct {
+		Group string `cbor:"group"`
+	}{group}})
 }
 
 func encListGroups() []byte {
-	return encodeRequest(reqListGroups, nil)
+	return marshal("ListGroups")
 }
 
 func encGroupAcl(group string) []byte {
-	return encodeRequest(reqGroupAcl, func(e *encoder) { e.str(group) })
+	return marshal(map[string]any{"GroupAcl": struct {
+		Group string `cbor:"group"`
+	}{group}})
 }
 
-// NameVersion is one entry of a secret listing.
+// NameVersion is one entry of a secret listing (a Rust `(String, u64)`
+// tuple on the wire, i.e. a two-element array).
 type NameVersion struct {
+	_       struct{} `cbor:",toarray"`
 	Name    string
 	Version uint64
 }
 
 // IdentityInfo describes a registered identity.
 type IdentityInfo struct {
-	Name         string
-	EndpointID   string
-	ServiceAdmin bool
+	Name         string `cbor:"name"`
+	EndpointID   string `cbor:"endpoint_id"`
+	ServiceAdmin bool   `cbor:"service_admin"`
 }
 
 // GroupInfo is one entry of a group listing, with the caller's own
 // permission bitmask on that group.
 type GroupInfo struct {
-	Name  string
-	Perms byte
+	Name  string `cbor:"name"`
+	Perms byte   `cbor:"perms"`
 }
 
-// ACLEntry is one identity's permissions on a group.
+// ACLEntry is one identity's permissions on a group (a `(String, u8)`
+// tuple on the wire).
 type ACLEntry struct {
+	_        struct{} `cbor:",toarray"`
 	Identity string
 	Perms    byte
 }
@@ -190,7 +185,7 @@ type Groups struct {
 // ACL lists a group's access control entries.
 type ACL []ACLEntry
 
-// Failed is an post-authorization failure with an informative reason.
+// Failed is a post-authorization failure with an informative reason.
 type Failed struct{ Reason string }
 
 func (Denied) isResponse()          {}
@@ -205,124 +200,91 @@ func (ACL) isResponse()             {}
 func (Failed) isResponse()          {}
 
 func decodeResponse(buf []byte) (Response, error) {
-	d := &decoder{buf: buf}
-	discriminant, err := d.uvarint()
-	if err != nil {
-		return nil, err
+	// Unit variants arrive as bare text strings.
+	var unit string
+	if err := cbor.Unmarshal(buf, &unit); err == nil {
+		switch unit {
+		case "Denied":
+			return Denied{}, nil
+		case "Ok":
+			return OK{}, nil
+		default:
+			return nil, fmt.Errorf("unknown response variant %q", unit)
+		}
 	}
-	var resp Response
-	switch discriminant {
-	case respDenied:
-		resp = Denied{}
-	case respOk:
-		resp = OK{}
-	case respSecret:
-		var s Secret
-		if s.Value, err = d.bytes(); err != nil {
-			return nil, err
-		}
-		if s.Version, err = d.uvarint(); err != nil {
-			return nil, err
-		}
-		resp = s
-	case respVersion:
-		var v Version
-		if v.Version, err = d.uvarint(); err != nil {
-			return nil, err
-		}
-		resp = v
-	case respVersionConflict:
-		var v VersionConflict
-		if v.Current, err = d.uvarint(); err != nil {
-			return nil, err
-		}
-		resp = v
-	case respNames:
-		count, err := d.uvarint()
-		if err != nil {
-			return nil, err
-		}
-		names := make(Names, 0, count)
-		for range count {
-			var nv NameVersion
-			if nv.Name, err = d.str(); err != nil {
-				return nil, err
-			}
-			if nv.Version, err = d.uvarint(); err != nil {
-				return nil, err
-			}
-			names = append(names, nv)
-		}
-		resp = names
-	case respIdentities:
-		count, err := d.uvarint()
-		if err != nil {
-			return nil, err
-		}
-		ids := make(Identities, 0, count)
-		for range count {
-			var info IdentityInfo
-			if info.Name, err = d.str(); err != nil {
-				return nil, err
-			}
-			if info.EndpointID, err = d.str(); err != nil {
-				return nil, err
-			}
-			if info.ServiceAdmin, err = d.boolean(); err != nil {
-				return nil, err
-			}
-			ids = append(ids, info)
-		}
-		resp = ids
-	case respGroups:
-		var g Groups
-		if g.ServiceAdmin, err = d.boolean(); err != nil {
-			return nil, err
-		}
-		count, err := d.uvarint()
-		if err != nil {
-			return nil, err
-		}
-		g.Groups = make([]GroupInfo, 0, count)
-		for range count {
-			var info GroupInfo
-			if info.Name, err = d.str(); err != nil {
-				return nil, err
-			}
-			if info.Perms, err = d.u8(); err != nil {
-				return nil, err
-			}
-			g.Groups = append(g.Groups, info)
-		}
-		resp = g
-	case respAcl:
-		count, err := d.uvarint()
-		if err != nil {
-			return nil, err
-		}
-		acl := make(ACL, 0, count)
-		for range count {
-			var entry ACLEntry
-			if entry.Identity, err = d.str(); err != nil {
-				return nil, err
-			}
-			if entry.Perms, err = d.u8(); err != nil {
-				return nil, err
-			}
-			acl = append(acl, entry)
-		}
-		resp = acl
-	case respFailed:
-		var f Failed
-		if f.Reason, err = d.str(); err != nil {
-			return nil, err
-		}
-		resp = f
-	default:
-		return nil, fmt.Errorf("unknown response discriminant %d", discriminant)
+	// Everything else is a single-entry map keyed by the variant name.
+	var envelope map[string]cbor.RawMessage
+	if err := cbor.Unmarshal(buf, &envelope); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
 	}
-	if err := d.done(); err != nil {
-		return nil, err
+	if len(envelope) != 1 {
+		return nil, errors.New("response envelope must have exactly one entry")
 	}
-	return resp, nil
+	for variant, raw := range envelope {
+		switch variant {
+		case "Secret":
+			var body struct {
+				Value   []byte `cbor:"value"`
+				Version uint64 `cbor:"version"`
+			}
+			if err := cbor.Unmarshal(raw, &body); err != nil {
+				return nil, err
+			}
+			return Secret{Value: body.Value, Version: body.Version}, nil
+		case "Version":
+			var body struct {
+				Version uint64 `cbor:"version"`
+			}
+			if err := cbor.Unmarshal(raw, &body); err != nil {
+				return nil, err
+			}
+			return Version{Version: body.Version}, nil
+		case "VersionConflict":
+			var body struct {
+				Current uint64 `cbor:"current"`
+			}
+			if err := cbor.Unmarshal(raw, &body); err != nil {
+				return nil, err
+			}
+			return VersionConflict{Current: body.Current}, nil
+		case "Names":
+			var names Names
+			if err := cbor.Unmarshal(raw, &names); err != nil {
+				return nil, err
+			}
+			return names, nil
+		case "Identities":
+			var ids Identities
+			if err := cbor.Unmarshal(raw, &ids); err != nil {
+				return nil, err
+			}
+			return ids, nil
+		case "Groups":
+			var body struct {
+				ServiceAdmin bool        `cbor:"service_admin"`
+				Groups       []GroupInfo `cbor:"groups"`
+			}
+			if err := cbor.Unmarshal(raw, &body); err != nil {
+				return nil, err
+			}
+			return Groups{ServiceAdmin: body.ServiceAdmin, Groups: body.Groups}, nil
+		case "Acl":
+			var acl ACL
+			if err := cbor.Unmarshal(raw, &acl); err != nil {
+				return nil, err
+			}
+			return acl, nil
+		case "Failed":
+			var body struct {
+				Reason string `cbor:"reason"`
+			}
+			if err := cbor.Unmarshal(raw, &body); err != nil {
+				return nil, err
+			}
+			return Failed{Reason: body.Reason}, nil
+		default:
+			return nil, fmt.Errorf("unknown response variant %q", variant)
+		}
+	}
+	return nil, errors.New("unreachable: empty envelope")
 }
