@@ -1,0 +1,15 @@
+# See http://help.github.com/ignore-files/ for more about ignoring files.
+
+*un~
+.DS_Store
+*/**/.DS_Store
+.direnv
+
+#*
+.#*
+*#
+*~
+.project
+.settings
+
+/bin/

@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The Rust server lives in a private repo; a read-only deploy key
+      # (secret SECRET_BUNKER_DEPLOY_KEY) grants access.
+      - uses: actions/checkout@v5
+        with:
+          repository: fables-for-robots/secret-bunker-iroh
+          ssh-key: ${{ secrets.SECRET_BUNKER_DEPLOY_KEY }}
+          path: server
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+
+      - name: Check gofmt
+        run: test -z "$(gofmt -l .)"
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Build Rust server
+        run: cargo build --manifest-path server/Cargo.toml --bin secret-bunker-iroh
+
+      - name: Tests (unit + cross-language e2e against the Rust server)
+        env:
+          SECRET_BUNKER_BIN: ${{ github.workspace }}/server/target/debug/secret-bunker-iroh
+        run: go test -v ./...
