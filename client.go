@@ -257,6 +257,15 @@ func (c *Client) ListIdentities(ctx context.Context) (Identities, error) {
 	return ids, nil
 }
 
+// SetServiceAdmin grants or revokes the service-admin flag on an
+// identity; requires service admin. The flag carries implicit
+// read|write|admin on every group, so granting it confers access to all
+// secrets and revoking it removes that access; revoking the last
+// service admin fails.
+func (c *Client) SetServiceAdmin(ctx context.Context, name string, serviceAdmin bool) error {
+	return c.expectOK(ctx, encSetServiceAdmin(name, serviceAdmin))
+}
+
 // ListIdentityNames lists the names of all registered identities so grant
 // targets can be chosen; requires admin on the group. Unlike
 // ListIdentities it needs no service admin and exposes names only.

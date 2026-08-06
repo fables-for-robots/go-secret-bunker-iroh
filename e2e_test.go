@@ -244,6 +244,30 @@ func TestCrossLanguageLifecycle(t *testing.T) {
 		t.Fatalf("restore read-only: %v", err)
 	}
 
+	// Service admin is root: the flag alone opens every group, and
+	// revoking it closes them again.
+	if err := admin.CreateGroup(ctx, "ops"); err != nil {
+		t.Fatalf("CreateGroup ops: %v", err)
+	}
+	if _, err := admin.Put(ctx, "ops", "token", []byte("t"), 0); err != nil {
+		t.Fatalf("Put ops: %v", err)
+	}
+	if _, err := user.Get(ctx, "ops", "token"); !errors.Is(err, ErrDenied) {
+		t.Fatalf("non-admin Get ops: expected ErrDenied, got %v", err)
+	}
+	if err := admin.SetServiceAdmin(ctx, "go-user", true); err != nil {
+		t.Fatalf("SetServiceAdmin grant: %v", err)
+	}
+	if got, err := user.Get(ctx, "ops", "token"); err != nil || string(got.Value) != "t" {
+		t.Fatalf("service-admin Get ops: %+v, err %v", got, err)
+	}
+	if err := admin.SetServiceAdmin(ctx, "go-user", false); err != nil {
+		t.Fatalf("SetServiceAdmin revoke: %v", err)
+	}
+	if _, err := user.Get(ctx, "ops", "token"); !errors.Is(err, ErrDenied) {
+		t.Fatalf("revoked service-admin Get ops: expected ErrDenied, got %v", err)
+	}
+
 	// DEK rotation keeps old secrets readable.
 	if err := admin.RotateDek(ctx, "team"); err != nil {
 		t.Fatalf("RotateDek: %v", err)
@@ -265,6 +289,7 @@ func TestCrossLanguageLifecycle(t *testing.T) {
 			_, err := stranger.ListIdentityNames(ctx, "team")
 			return err
 		},
+		"SetServiceAdmin": func() error { return stranger.SetServiceAdmin(ctx, "go-user", true) },
 	} {
 		if err := call(); !errors.Is(err, ErrDenied) {
 			t.Errorf("stranger %s: expected ErrDenied, got %v", name, err)

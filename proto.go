@@ -123,6 +123,13 @@ func encListIdentityNames(group string) []byte {
 	}{group}})
 }
 
+func encSetServiceAdmin(name string, serviceAdmin bool) []byte {
+	return marshal(map[string]any{"SetServiceAdmin": struct {
+		Name         string `cbor:"name"`
+		ServiceAdmin bool   `cbor:"service_admin"`
+	}{name, serviceAdmin}})
+}
+
 // NameVersion is one entry of a secret listing (a Rust `(String, u64)`
 // tuple on the wire, i.e. a two-element array).
 type NameVersion struct {

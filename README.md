@@ -52,8 +52,8 @@ func example(ctx context.Context) error {
 The full protocol is covered: `Get`, `Put`, `Delete` (compare-and-set
 versioning), `List`, `ListGroups`, `GroupACL`, `ListIdentityNames`, and
 the admin operations (`CreateGroup`, `AddIdentity`, `RemoveIdentity`,
-`ListIdentities`, `Grant`, `RotateDek`). The bunker's uniform denial
-surfaces as
+`SetServiceAdmin`, `ListIdentities`, `Grant`, `RotateDek`). The bunker's
+uniform denial surfaces as
 `ErrDenied`; CAS failures as `*ConflictError` with the current version.
 
 Because the upstream `go-iroh` module path is `github.com/tmc/go-iroh`,

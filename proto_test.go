@@ -29,6 +29,11 @@ func TestRequestGoldenVectors(t *testing.T) {
 			encListIdentityNames("g"),
 			"a1714c6973744964656e746974794e616d6573a16567726f75706167",
 		},
+		{
+			"set-service-admin",
+			encSetServiceAdmin("bob", false),
+			"a16f5365745365727669636541646d696ea2646e616d6563626f626d736572766963655f61646d696ef4",
+		},
 	}
 	for _, c := range cases {
 		if got := hex.EncodeToString(c.got); got != c.want {
