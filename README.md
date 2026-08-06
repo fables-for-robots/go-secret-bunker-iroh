@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="secret-bunker Go client logo: a bunker vault door with a glowing padlock — Go client for secret-bunker, built on iroh" width="360">
+</p>
+
 # go-secret-bunker-iroh
 
 Go client for [secret-bunker-iroh](https://github.com/fables-for-robots/secret-bunker-iroh):
