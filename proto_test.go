@@ -24,6 +24,11 @@ func TestRequestGoldenVectors(t *testing.T) {
 		},
 		{"list-groups", encListGroups(), "6a4c69737447726f757073"},
 		{"grant", encGrant("g", "id", 7), "a1654772616e74a36567726f75706167686964656e74697479626964657065726d7307"},
+		{
+			"list-identity-names",
+			encListIdentityNames("g"),
+			"a1714c6973744964656e746974794e616d6573a16567726f75706167",
+		},
 	}
 	for _, c := range cases {
 		if got := hex.EncodeToString(c.got); got != c.want {
@@ -53,6 +58,11 @@ func TestResponseGoldenVectors(t *testing.T) {
 			"groups",
 			"a16647726f757073a26d736572766963655f61646d696ef56667726f75707381a2646e616d656167657065726d7305",
 			Groups{ServiceAdmin: true, Groups: []GroupInfo{{Name: "g", Perms: 5}}},
+		},
+		{
+			"identity-names",
+			"a16d4964656e746974794e616d6573816161",
+			IdentityNames{"a"},
 		},
 		{"failed", "a1664661696c6564a166726561736f6e626e6f", Failed{Reason: "no"}},
 		{

@@ -117,6 +117,12 @@ func encGroupAcl(group string) []byte {
 	}{group}})
 }
 
+func encListIdentityNames(group string) []byte {
+	return marshal(map[string]any{"ListIdentityNames": struct {
+		Group string `cbor:"group"`
+	}{group}})
+}
+
 // NameVersion is one entry of a secret listing (a Rust `(String, u64)`
 // tuple on the wire, i.e. a two-element array).
 type NameVersion struct {
@@ -185,6 +191,10 @@ type Groups struct {
 // ACL lists a group's access control entries.
 type ACL []ACLEntry
 
+// IdentityNames lists the names of all registered identities (no endpoint
+// ids or service-admin flags).
+type IdentityNames []string
+
 // Failed is a post-authorization failure with an informative reason.
 type Failed struct{ Reason string }
 
@@ -197,6 +207,7 @@ func (Names) isResponse()           {}
 func (Identities) isResponse()      {}
 func (Groups) isResponse()          {}
 func (ACL) isResponse()             {}
+func (IdentityNames) isResponse()   {}
 func (Failed) isResponse()          {}
 
 func decodeResponse(buf []byte) (Response, error) {
@@ -274,6 +285,12 @@ func decodeResponse(buf []byte) (Response, error) {
 				return nil, err
 			}
 			return acl, nil
+		case "IdentityNames":
+			var names IdentityNames
+			if err := cbor.Unmarshal(raw, &names); err != nil {
+				return nil, err
+			}
+			return names, nil
 		case "Failed":
 			var body struct {
 				Reason string `cbor:"reason"`

@@ -225,6 +225,25 @@ func TestCrossLanguageLifecycle(t *testing.T) {
 		t.Fatalf("ACL: %+v, want %+v", acl, wantACL)
 	}
 
+	// Grant targets: identity names are listable by group admins — even
+	// ones that are not service admins — and by nobody below that.
+	if _, err := user.ListIdentityNames(ctx, "team"); !errors.Is(err, ErrDenied) {
+		t.Fatalf("read-only ListIdentityNames: expected ErrDenied, got %v", err)
+	}
+	if err := admin.Grant(ctx, "team", "go-user", PermRead|PermAdmin); err != nil {
+		t.Fatalf("grant admin: %v", err)
+	}
+	names, err := user.ListIdentityNames(ctx, "team")
+	if err != nil || !reflect.DeepEqual(names, IdentityNames{"admin", "go-user"}) {
+		t.Fatalf("ListIdentityNames: %+v, err %v", names, err)
+	}
+	if _, err := user.ListIdentities(ctx); !errors.Is(err, ErrDenied) {
+		t.Fatalf("group-admin ListIdentities: expected ErrDenied, got %v", err)
+	}
+	if err := admin.Grant(ctx, "team", "go-user", PermRead); err != nil {
+		t.Fatalf("restore read-only: %v", err)
+	}
+
 	// DEK rotation keeps old secrets readable.
 	if err := admin.RotateDek(ctx, "team"); err != nil {
 		t.Fatalf("RotateDek: %v", err)
@@ -242,6 +261,10 @@ func TestCrossLanguageLifecycle(t *testing.T) {
 		"ListGroups":  func() error { _, err := stranger.ListGroups(ctx); return err },
 		"CreateGroup": func() error { return stranger.CreateGroup(ctx, "mine") },
 		"GroupACL":    func() error { _, err := stranger.GroupACL(ctx, "team"); return err },
+		"ListIdentityNames": func() error {
+			_, err := stranger.ListIdentityNames(ctx, "team")
+			return err
+		},
 	} {
 		if err := call(); !errors.Is(err, ErrDenied) {
 			t.Errorf("stranger %s: expected ErrDenied, got %v", name, err)

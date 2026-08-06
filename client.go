@@ -257,6 +257,21 @@ func (c *Client) ListIdentities(ctx context.Context) (Identities, error) {
 	return ids, nil
 }
 
+// ListIdentityNames lists the names of all registered identities so grant
+// targets can be chosen; requires admin on the group. Unlike
+// ListIdentities it needs no service admin and exposes names only.
+func (c *Client) ListIdentityNames(ctx context.Context, group string) (IdentityNames, error) {
+	resp, err := mapErr(c.do(ctx, encListIdentityNames(group)))
+	if err != nil {
+		return nil, err
+	}
+	names, ok := resp.(IdentityNames)
+	if !ok {
+		return nil, unexpected(resp)
+	}
+	return names, nil
+}
+
 // Grant sets an identity's permission bitmask on a group (0 revokes);
 // requires admin on the group.
 func (c *Client) Grant(ctx context.Context, group, identity string, perms byte) error {
