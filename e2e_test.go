@@ -1,10 +1,14 @@
 package secretbunker
 
-// Cross-language end-to-end test: this Go client against the real Rust
+// Cross-language end-to-end tests: this Go client against the real Rust
 // secret-bunker-iroh server. Set SECRET_BUNKER_BIN to the server binary
-// (the test is skipped without it):
+// (the tests are skipped without it):
 //
 //	SECRET_BUNKER_BIN=../secret-bunker-iroh/target/debug/secret-bunker-iroh go test ./...
+//
+// SECRET_BUNKER_E2E_RELAY=1 also runs the test that reaches the bunker
+// through n0's relays, which needs the internet. SECRET_BUNKER_SKIP_MDNS=1
+// skips the test that finds it by mDNS, for machines without multicast.
 
 import (
 	"bufio"
@@ -15,23 +19,28 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/tmc/go-iroh/iroh"
+	"github.com/tmc/go-iroh/iroh/mdns"
 	"github.com/tmc/go-iroh/key"
 )
 
 type bunkerServer struct {
 	id   string
 	addr string
+	log  string // path of the serve process's stderr log
 }
 
 // startServer initializes a bunker database with adminID as the service
-// admin and runs `serve --no-relay --no-mdns`, returning its EndpointId
-// and direct socket address.
-func startServer(t *testing.T, bin, adminID string) bunkerServer {
+// admin and runs `serve` with serveFlags, or with `--no-relay --no-mdns`
+// when none are given, returning its EndpointId, direct socket address
+// and log path.
+func startServer(t *testing.T, bin, adminID string, serveFlags ...string) bunkerServer {
 	t.Helper()
 	dir := t.TempDir()
 	xdg := filepath.Join(dir, "xdg-server")
@@ -55,7 +64,10 @@ func startServer(t *testing.T, bin, adminID string) bunkerServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	serve := exec.Command(bin, "serve", "--db", db, "--no-relay", "--no-mdns")
+	if len(serveFlags) == 0 {
+		serveFlags = []string{"--no-relay", "--no-mdns"}
+	}
+	serve := exec.Command(bin, append([]string{"serve", "--db", db}, serveFlags...)...)
 	serve.Env = append(os.Environ(), "XDG_DATA_HOME="+xdg)
 	serve.Stderr = logFile
 	if err := serve.Start(); err != nil {
@@ -70,7 +82,7 @@ func startServer(t *testing.T, bin, adminID string) bunkerServer {
 	// Wait for the server to log its id and bound port.
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		var server bunkerServer
+		server := bunkerServer{log: logPath}
 		if contents, err := os.ReadFile(logPath); err == nil {
 			scanner := bufio.NewScanner(strings.NewReader(string(contents)))
 			for scanner.Scan() {
@@ -89,6 +101,23 @@ func startServer(t *testing.T, bin, adminID string) bunkerServer {
 		if time.Now().After(deadline) {
 			contents, _ := os.ReadFile(logPath)
 			t.Fatalf("server did not become ready; log:\n%s", contents)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// waitForLog polls the serve log at logPath until it contains substring,
+// and fails the test when timeout passes first.
+func waitForLog(t *testing.T, logPath, substring string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		contents, err := os.ReadFile(logPath)
+		if err == nil && strings.Contains(string(contents), substring) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server did not log %q within %s; log:\n%s", substring, timeout, contents)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -295,6 +324,88 @@ func TestCrossLanguageLifecycle(t *testing.T) {
 			t.Errorf("stranger %s: expected ErrDenied, got %v", name, err)
 		}
 	}
+}
+
+// The bunker announces itself by mDNS only; the client has no address.
+func TestDialByIDOverMDNS(t *testing.T) {
+	bin := os.Getenv("SECRET_BUNKER_BIN")
+	if bin == "" {
+		t.Skip("SECRET_BUNKER_BIN not set; skipping cross-language e2e")
+	}
+	if os.Getenv("SECRET_BUNKER_SKIP_MDNS") != "" {
+		t.Skip("SECRET_BUNKER_SKIP_MDNS set: no multicast here")
+	}
+	admin := generateKey(t)
+	server := startServer(t, bin, admin.Public().EndpointID().String(), "--no-relay")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client, err := Dial(ctx, admin, server.id) // no address
+	if err != nil {
+		t.Fatalf("dialing by id over mDNS: %v", err)
+	}
+	defer client.Close(context.Background())
+	if _, err := client.ListGroups(ctx); err != nil {
+		t.Fatalf("ListGroups: %v", err)
+	}
+
+	// It was mDNS that found the bunker, not n0's discovery: the address
+	// in use came from there.
+	id, err := key.ParseEndpointID(server.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, _ := client.endpoint.RemoteInfo(id)
+	if !slices.ContainsFunc(info.Addrs, func(a iroh.TransportAddrInfo) bool {
+		return a.Usage == iroh.TransportAddrActive && a.Provenance == mdns.Provenance
+	}) {
+		t.Fatalf("the bunker's address in use was not found by mDNS: %+v", info.Addrs)
+	}
+
+	if len(mdnsGoroutines()) == 0 {
+		t.Fatal("a client dialed by id is not listening for mDNS")
+	}
+	closeStopsMDNS(t, client)
+}
+
+// closeStopsMDNS closes a client that was dialed by id and fails the test
+// if the mDNS listener that the dial started is still running afterwards.
+func closeStopsMDNS(t *testing.T, client *Client) {
+	t.Helper()
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(mdnsGoroutines()) > 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("Close left the mDNS listener running:\n%s", strings.Join(mdnsGoroutines(), "\n\n"))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// The bunker is reachable through n0's relays only; needs the internet.
+func TestDialByIDOverRelay(t *testing.T) {
+	bin := os.Getenv("SECRET_BUNKER_BIN")
+	if bin == "" {
+		t.Skip("SECRET_BUNKER_BIN not set; skipping cross-language e2e")
+	}
+	if os.Getenv("SECRET_BUNKER_E2E_RELAY") != "1" {
+		t.Skip("SECRET_BUNKER_E2E_RELAY=1 not set: needs the internet and n0's relays")
+	}
+	admin := generateKey(t)
+	server := startServer(t, bin, admin.Public().EndpointID().String(), "--no-mdns")
+	waitForLog(t, server.log, "online: reachable via relay", 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client, err := Dial(ctx, admin, server.id) // no address
+	if err != nil {
+		t.Fatalf("dialing by id over n0's relays: %v", err)
+	}
+	defer client.Close(context.Background())
+	if _, err := client.ListGroups(ctx); err != nil {
+		t.Fatalf("ListGroups: %v", err)
+	}
+	closeStopsMDNS(t, client)
 }
 
 func TestMain(m *testing.M) {

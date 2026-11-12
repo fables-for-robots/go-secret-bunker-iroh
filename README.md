@@ -31,7 +31,7 @@ func example(ctx context.Context) error {
     }
     // Register key.EndpointID(secret.Public()).String() with the bunker's
     // admin, then:
-    client, err := secretbunker.Dial(ctx, secret, serverHexID, "192.0.2.10:4433")
+    client, err := secretbunker.Dial(ctx, secret, serverHexID)
     if err != nil {
         return err
     }
@@ -48,6 +48,13 @@ func example(ctx context.Context) error {
     return nil
 }
 ```
+
+Without an address, `Dial` finds the bunker by its id, the way the Rust
+client does without `--server-addr`: through n0's relays and discovery (DNS
+and pkarr), and through mDNS on the local network.
+With one or more `"ip:port"` addresses after the id
+(`secretbunker.Dial(ctx, secret, serverHexID, "192.0.2.10:4433")`), it dials
+those directly and uses neither relays nor lookup, so it works air-gapped.
 
 The full protocol is covered: `Get`, `Put`, `Delete` (compare-and-set
 versioning), `List`, `ListGroups`, `GroupACL`, `ListIdentityNames`, and
@@ -70,13 +77,21 @@ examples lives in the server repo:
 
 ## Testing
 
-Unit tests run standalone. The cross-language end-to-end test drives this
+Unit tests run standalone. The cross-language end-to-end tests drive this
 client against the real Rust server (the same suite runs in CI):
 
 ```sh
 cargo build --manifest-path ../secret-bunker-iroh/Cargo.toml
 SECRET_BUNKER_BIN=../secret-bunker-iroh/target/debug/secret-bunker-iroh go test ./...
 ```
+
+Two more variables steer the tests that dial by id: `SECRET_BUNKER_E2E_RELAY=1`
+also runs the one that reaches the bunker through n0's relays (it needs the
+internet), and `SECRET_BUNKER_SKIP_MDNS=1` skips the one that finds it by
+mDNS, for machines without multicast. When n0's servers are reachable, the
+test that a failed `Dial` leaves nothing running takes about half a minute:
+it waits for those servers to close the idle HTTP connections that go-iroh's
+probes leave behind.
 
 ## License
 

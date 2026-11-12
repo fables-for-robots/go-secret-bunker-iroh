@@ -14,8 +14,10 @@ import (
 	"net/netip"
 
 	"github.com/tmc/go-iroh/iroh"
+	"github.com/tmc/go-iroh/iroh/mdns"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
+	"github.com/tmc/go-iroh/relay"
 )
 
 // ErrDenied is the bunker's uniform denial: unknown identity, missing
@@ -39,17 +41,25 @@ func (e *FailedError) Error() string { return "bunker operation failed: " + e.Re
 type Client struct {
 	endpoint *iroh.Endpoint
 	conn     *iroh.Conn
+	// stop ends the mDNS listener of a client that found its bunker by
+	// id; nil for one that dialed addresses.
+	stop func()
 }
 
-// Dial connects to the bunker with the given EndpointId (lowercase hex)
-// at one of the given "ip:port" addresses, authenticating as secret.
+// Dial connects to the bunker with the given EndpointId (lowercase hex),
+// authenticating as secret.
+//
+// With addrs ("ip:port"), it dials those directly and uses nothing else:
+// no relays, no lookup. With none, it finds the bunker by its id, the way
+// the Rust client does without --server-addr: through n0's relays and
+// discovery (DNS and pkarr), and through mDNS on the local network.
 func Dial(ctx context.Context, secret key.SecretKey, serverID string, addrs ...string) (*Client, error) {
-	if len(addrs) == 0 {
-		return nil, errors.New("at least one server address is required")
-	}
 	id, err := key.ParseEndpointID(serverID)
 	if err != nil {
 		return nil, fmt.Errorf("parsing server id: %w", err)
+	}
+	if len(addrs) == 0 {
+		return dialByID(ctx, secret, id)
 	}
 	addr := netaddr.NewEndpointAddr(id)
 	for _, a := range addrs {
@@ -71,10 +81,64 @@ func Dial(ctx context.Context, secret key.SecretKey, serverID string, addrs ...s
 	return &Client{endpoint: endpoint, conn: conn}, nil
 }
 
-// Close terminates the connection and shuts the endpoint down.
+// dialByID connects to the bunker with the given id without knowing an
+// address of it: the endpoint uses n0's relays, and asks n0's DNS, n0's
+// pkarr relay and mDNS where the bunker is.
+func dialByID(ctx context.Context, secret key.SecretKey, id key.EndpointID) (*Client, error) {
+	pkarr, err := iroh.N0PkarrResolver(nil)
+	if err != nil {
+		return nil, fmt.Errorf("setting up pkarr lookup: %w", err)
+	}
+	// Passive: the client listens and asks, and announces nothing.
+	discovery := mdns.New(secret.Public().EndpointID(), mdns.WithPassive(true))
+	var lookup iroh.AddressLookupServices
+	lookup.AddResolver(iroh.N0DNSAddressLookup(nil))
+	lookup.AddResolver(pkarr)
+	lookup.AddResolver(discovery)
+
+	// The listener outlives ctx: it belongs to the client, whose endpoint
+	// keeps asking the lookup for the bunker's addresses. It starts before
+	// the endpoint is bound so that it is listening by the time the dial
+	// asks. A listener that cannot start (no multicast here) is not an
+	// error: the bunker can still be found through n0.
+	listenCtx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		_ = discovery.Start(listenCtx)
+	}()
+	stop := func() {
+		cancel()
+		<-stopped
+	}
+
+	endpoint, err := iroh.Bind(ctx,
+		iroh.WithSecretKey(secret),
+		iroh.WithRelayMode(relay.ModeDefault()),
+		iroh.WithAddressLookup(&lookup),
+	)
+	if err != nil {
+		stop()
+		return nil, fmt.Errorf("binding iroh endpoint: %w", err)
+	}
+	conn, err := endpoint.Connect(ctx, netaddr.NewEndpointAddr(id), ALPN)
+	if err != nil {
+		_ = endpoint.Shutdown(context.WithoutCancel(ctx))
+		stop()
+		return nil, fmt.Errorf("connecting to bunker %s by discovery: %w", id.String()[:8], err)
+	}
+	return &Client{endpoint: endpoint, conn: conn, stop: stop}, nil
+}
+
+// Close terminates the connection, shuts the endpoint down and, for a
+// client that found its bunker by id, stops the mDNS listener.
 func (c *Client) Close(ctx context.Context) error {
 	_ = c.conn.Close()
-	return c.endpoint.Shutdown(ctx)
+	err := c.endpoint.Shutdown(ctx)
+	if c.stop != nil {
+		c.stop()
+	}
+	return err
 }
 
 // ID is this client's own EndpointId (lowercase hex) — the identity the
