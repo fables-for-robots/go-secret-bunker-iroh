@@ -7,8 +7,8 @@
 Go client for [secret-bunker-iroh](https://github.com/fables-for-robots/secret-bunker-iroh):
 a secrets service reached over [iroh](https://www.iroh.computer) — peer-to-peer
 QUIC dialed by public key. Pure Go (no CGO), using the native Go iroh
-implementation [go-iroh](https://github.com/tmc/go-iroh) via the
-[draganm fork](https://github.com/draganm/go-iroh).
+implementation, upstream [go-iroh](https://github.com/tmc/go-iroh)
+(`github.com/tmc/go-iroh`).
 
 The client's identity is its iroh ed25519 key: the server authenticates it
 in the QUIC/TLS handshake and authorizes every request against its ACLs.
@@ -55,11 +55,6 @@ the admin operations (`CreateGroup`, `AddIdentity`, `RemoveIdentity`,
 `SetServiceAdmin`, `ListIdentities`, `Grant`, `RotateDek`). The bunker's
 uniform denial surfaces as
 `ErrDenied`; CAS failures as `*ConflictError` with the current version.
-
-Because the upstream `go-iroh` module path is `github.com/tmc/go-iroh`,
-this module carries a `replace` directive pointing at the
-`draganm/go-iroh` fork — consumers inherit the import path, and their own
-`go.mod` needs the same replace directive.
 
 ## Wire format
 
